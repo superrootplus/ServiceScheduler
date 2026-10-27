@@ -1,0 +1,22 @@
+# Собранные файлы и резервные копии
+dist/
+backups/
+plugin-inspect/
+
+# Python
+__pycache__/
+*.py[cod]
+*.spec.bak
+
+# Временные результаты тестов
+wpf/*.exe
+wpf/*.dll
+wpf/*-output.txt
+wpf/*-error.txt
+
+# Visual Studio и Windows
+.vs/
+*.user
+*.suo
+Thumbs.db
+Desktop.ini
