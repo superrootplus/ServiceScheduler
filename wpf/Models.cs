@@ -8,7 +8,8 @@ namespace ServiceScheduler
         Start,
         Stop,
         Restart,
-        HardRestart
+        HardRestart,
+        HardStop
     }
 
     public static class OperationInfo
@@ -21,6 +22,7 @@ namespace ServiceScheduler
                 case ServiceOperation.Stop: return "stop";
                 case ServiceOperation.Restart: return "restart";
                 case ServiceOperation.HardRestart: return "hard_restart";
+                case ServiceOperation.HardStop: return "hard_stop";
                 default: throw new ArgumentOutOfRangeException("operation");
             }
         }
@@ -33,6 +35,7 @@ namespace ServiceScheduler
                 case "stop": operation = ServiceOperation.Stop; return true;
                 case "restart": operation = ServiceOperation.Restart; return true;
                 case "hard_restart": operation = ServiceOperation.HardRestart; return true;
+                case "hard_stop": operation = ServiceOperation.HardStop; return true;
                 default: operation = ServiceOperation.Start; return false;
             }
         }
@@ -45,8 +48,15 @@ namespace ServiceScheduler
                 case ServiceOperation.Stop: return "Остановка";
                 case ServiceOperation.Restart: return "Перезапуск";
                 case ServiceOperation.HardRestart: return "Жёсткий перезапуск (kill)";
+                case ServiceOperation.HardStop: return "Жёсткая остановка (kill)";
                 default: return operation.ToString();
             }
+        }
+
+        public static bool UsesKill(ServiceOperation operation)
+        {
+            return operation == ServiceOperation.HardRestart ||
+                operation == ServiceOperation.HardStop;
         }
 
         public static IEnumerable<ServiceOperation> All
@@ -57,6 +67,7 @@ namespace ServiceScheduler
                 yield return ServiceOperation.Stop;
                 yield return ServiceOperation.Restart;
                 yield return ServiceOperation.HardRestart;
+                yield return ServiceOperation.HardStop;
             }
         }
     }

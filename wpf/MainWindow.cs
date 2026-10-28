@@ -24,7 +24,7 @@ namespace ServiceScheduler
 
         public MainWindow()
         {
-            Title = "Планировщик служб Windows 2.0";
+            Title = "Планировщик служб Windows 2.1";
             Width = 1440;
             Height = 800;
             MinWidth = 1120;
@@ -104,7 +104,7 @@ namespace ServiceScheduler
                 MessageBox.Show(this,
                     "Планировщик служб Windows\nВерсия " + Program.Version +
                     "\n\nНативный интерфейс Windows (WPF).\n" +
-                    "Запуск, остановка, перезапуск и жёсткий перезапуск служб\n" +
+                    "Запуск, остановка, перезапуск и жёсткие операции со службами\n" +
                     "через стандартный Планировщик заданий.\n\n" +
                     "Один exe, запуск от администратора.",
                     "О программе", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -186,8 +186,9 @@ namespace ServiceScheduler
                 SelectionMode = DataGridSelectionMode.Single,
                 SelectionUnit = DataGridSelectionUnit.FullRow,
                 HeadersVisibility = DataGridHeadersVisibility.Column,
-                GridLinesVisibility = DataGridGridLinesVisibility.Horizontal,
+                GridLinesVisibility = DataGridGridLinesVisibility.All,
                 HorizontalGridLinesBrush = UiFactory.Brush("#E5E7EB"),
+                VerticalGridLinesBrush = UiFactory.Brush("#D1D5DB"),
                 BorderThickness = new Thickness(0),
                 Background = Brushes.White,
                 RowBackground = Brushes.White,
@@ -201,15 +202,17 @@ namespace ServiceScheduler
             grid.ColumnHeaderStyle = ColumnHeaderStyle();
             grid.CellStyle = CellStyle();
             grid.RowStyle = RowStyle();
-            grid.MouseDoubleClick += delegate { ShowLog(); };
 
-            AddColumn("Задание", "Name", 200);
-            AddColumn("Служба", "ServiceName", 180);
+            AddLinkColumn("Задание", "Name", 200, "Открыть в Планировщике заданий Windows",
+                OpenTaskScheduler);
+            AddLinkColumn("Служба", "ServiceName", 180, "Открыть оснастку «Службы»",
+                OpenServiceConsole);
             AddColumn("Операция", "OperationText", 190);
             AddStarColumn("Расписание", "ScheduleText", 1.4);
             AddColumn("Последний запуск", "LastRunText", 150);
             AddColumn("Следующий запуск", "NextRunText", 150);
-            AddColumn("Результат", "LastResultText", 130);
+            AddLinkColumn("Результат", "LastResultText", 130, "Открыть журнал этого задания",
+                ShowLog);
             AddColumn("Состояние", "StateText", 100);
             AddColumn("Тип", "KindText", 80);
 
@@ -233,6 +236,37 @@ namespace ServiceScheduler
                 Binding = new Binding(binding) { Mode = BindingMode.OneWay },
                 Width = new DataGridLength(width),
                 ElementStyle = CellTextStyle()
+            });
+        }
+
+        private void AddLinkColumn(string header, string binding, double width,
+            string tooltip, Action<TaskInfo> open)
+        {
+            DataTemplate template = new DataTemplate();
+            FrameworkElementFactory text = new FrameworkElementFactory(typeof(TextBlock));
+            text.SetBinding(TextBlock.TextProperty, new Binding(binding) { Mode = BindingMode.OneWay });
+            text.SetValue(TextBlock.ForegroundProperty, UiFactory.Brush(UiFactory.Blue));
+            text.SetValue(TextBlock.TextDecorationsProperty, TextDecorations.Underline);
+            text.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
+            text.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
+            text.SetValue(TextBlock.CursorProperty, Cursors.Hand);
+            text.SetValue(TextBlock.ToolTipProperty, tooltip);
+            text.AddHandler(TextBlock.MouseLeftButtonUpEvent, new MouseButtonEventHandler(
+                delegate(object sender, MouseButtonEventArgs e)
+                {
+                    FrameworkElement element = sender as FrameworkElement;
+                    TaskInfo task = element == null ? null : element.DataContext as TaskInfo;
+                    if (task == null) return;
+                    grid.SelectedItem = task;
+                    e.Handled = true;
+                    open(task);
+                }));
+            template.VisualTree = text;
+            grid.Columns.Add(new DataGridTemplateColumn
+            {
+                Header = header,
+                CellTemplate = template,
+                Width = new DataGridLength(width)
             });
         }
 
@@ -459,7 +493,7 @@ namespace ServiceScheduler
             try
             {
                 Scheduler.DeleteTask(task.Path);
-                Logger.Info("Удалено задание " + task.Path);
+                Logger.Info("Задание удалено", task.Path, task.ServiceName);
                 RefreshTasks();
             }
             catch (Exception ex) { ShowError(ex); }
@@ -473,7 +507,7 @@ namespace ServiceScheduler
             {
                 Mouse.OverrideCursor = Cursors.Wait;
                 Scheduler.RunNow(task.Path);
-                Logger.Info("Задание " + task.Path + " запущено вручную");
+                Logger.Info("Задание запущено вручную", task.Path, task.ServiceName);
                 statusText.Text = "Задание запущено: " + task.Name;
                 DispatcherTimer timer = new DispatcherTimer
                 {
@@ -497,8 +531,8 @@ namespace ServiceScheduler
             try
             {
                 Scheduler.SetEnabled(task.Path, !task.IsEnabled);
-                Logger.Info("Задание " + task.Path + (task.IsEnabled ?
-                    " отключено" : " включено"));
+                Logger.Info(task.IsEnabled ? "Задание отключено" : "Задание включено",
+                    task.Path, task.ServiceName);
                 RefreshTasks();
             }
             catch (Exception ex) { ShowError(ex); }
@@ -523,23 +557,44 @@ namespace ServiceScheduler
             finally { Mouse.OverrideCursor = null; }
         }
 
-        private void ShowLog()
+        private void OpenTaskScheduler(TaskInfo task)
         {
             try
             {
-                Mouse.OverrideCursor = Cursors.Wait;
-                string text = Logger.ReadRecent(400);
-                if (string.IsNullOrEmpty(text))
+                Process.Start(new ProcessStartInfo
                 {
-                    text = string.IsNullOrEmpty(Logger.LastError)
-                        ? "Журнал пока пуст."
-                        : "Не удалось прочитать журнал:\n" + Logger.LastError;
-                }
-                text = "События также доступны: Просмотр событий → Журналы приложений и служб → ServiceScheduler\n"
-                    + new string('=', 80) + "\n\n" + text;
-                UiFactory.ShowTextWindow(this, "Журнал выполнения", text);
+                    FileName = "taskschd.msc",
+                    UseShellExecute = true
+                });
+                statusText.Text = "Открыт Планировщик заданий. Путь: " + task.Path;
             }
-            finally { Mouse.OverrideCursor = null; }
+            catch (Exception ex) { ShowError(ex); }
+        }
+
+        private void OpenServiceConsole(TaskInfo task)
+        {
+            if (string.IsNullOrWhiteSpace(task.ServiceName))
+            {
+                MessageBox.Show(this, "Для этого системного задания служба не указана.",
+                    "Служба", MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            try
+            {
+                Process.Start(new ProcessStartInfo
+                {
+                    FileName = "services.msc",
+                    UseShellExecute = true
+                });
+                statusText.Text = "Открыта оснастка «Службы». Имя службы: " + task.ServiceName;
+            }
+            catch (Exception ex) { ShowError(ex); }
+        }
+
+        private void ShowLog(TaskInfo task = null)
+        {
+            LogWindow window = new LogWindow(this, task);
+            window.ShowDialog();
         }
 
         private void ShowError(Exception ex)

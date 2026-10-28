@@ -50,8 +50,18 @@ namespace ServiceScheduler
                     out legacyService, out legacyOperation) && legacyService == "Spooler" &&
                     legacyOperation == ServiceOperation.HardRestart,
                     "старое имя hard_restart разобрано правильно");
+                Check(Scheduler.TryParseLegacyName("SvcMgr_Spooler_hard_stop",
+                    out legacyService, out legacyOperation) &&
+                    legacyOperation == ServiceOperation.HardStop,
+                    "старое имя hard_stop разобрано правильно");
+                ServiceOperation parsedOperation;
+                Check(OperationInfo.TryFromCode("hard_stop", out parsedOperation) &&
+                    parsedOperation == ServiceOperation.HardStop &&
+                    OperationInfo.ToCode(parsedOperation) == "hard_stop" &&
+                    OperationInfo.UsesKill(parsedOperation),
+                    "жёсткая остановка имеет отдельный код операции");
 
-                string executor = Path.Combine(Directory.GetCurrentDirectory(), "dist",
+                string executor = Path.Combine(AppDomain.CurrentDomain.BaseDirectory,
                     "ServiceScheduler.exe");
                 Check(File.Exists(executor), "тестовый исполнитель находится в workspace");
                 int before = Scheduler.ListTasks(true).Count;
@@ -65,6 +75,18 @@ namespace ServiceScheduler
                 string second = Add(daily, executor);
                 Check(!string.Equals(first, second, StringComparison.OrdinalIgnoreCase),
                     "два одинаковых расписания получили разные имена");
+                TaskInfo firstInfo = Find(first);
+                Check(firstInfo != null && firstInfo.Name.IndexOf("Spooler",
+                    StringComparison.OrdinalIgnoreCase) >= 0 &&
+                    !firstInfo.Name.StartsWith("SvcMgr_", StringComparison.OrdinalIgnoreCase),
+                    "новое задание получило понятное имя");
+                Check(firstInfo.ActionArguments.IndexOf("--task", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                    firstInfo.ActionArguments.IndexOf(first, StringComparison.OrdinalIgnoreCase) >= 0,
+                    "действие содержит путь задания для журнала");
+                TaskInfo allViewInfo = Scheduler.ListTasks(false).FirstOrDefault(t =>
+                    string.Equals(t.Path, first, StringComparison.OrdinalIgnoreCase));
+                Check(allViewInfo != null && allViewInfo.IsOwn,
+                    "своё задание распознаётся и в общем списке планировщика");
                 Check(Scheduler.ListTasks(true).Count == before + 2,
                     "в списке ровно два новых задания");
 
@@ -137,6 +159,17 @@ namespace ServiceScheduler
                     !intervalInfo.AllowSharedKill,
                     "интервал и операция hard_restart прочитаны корректно");
 
+                string hardStopPath = Add(daily, executor, ServiceOperation.HardStop);
+                Check(Find(hardStopPath).Operation == ServiceOperation.HardStop,
+                    "жёсткая остановка сохраняется и читается как отдельная операция");
+                string logMarker = "Автотест журнала " + Guid.NewGuid().ToString("N");
+                Logger.Info(logMarker, hardStopPath, "Spooler");
+                LogEntryInfo logEntry = Logger.ReadEntries(30).FirstOrDefault(e =>
+                    (e.Message ?? string.Empty).IndexOf(logMarker, StringComparison.Ordinal) >= 0);
+                Check(logEntry != null && logEntry.TaskPath == hardStopPath &&
+                    logEntry.ServiceName == "Spooler",
+                    "журнал Windows связывает запись со службой и заданием");
+
                 string legacyName = "SvcMgr_Spooler_" + Guid.NewGuid().ToString("N")
                     .Substring(0, 8) + "_hard_restart";
                 string legacyPath = Scheduler.SaveTask(legacyName, "Spooler",
@@ -159,7 +192,7 @@ namespace ServiceScheduler
                 int migrated = Scheduler.UpdateExecutorForOwnTasks(executor, legacyPath);
                 TaskInfo migratedInfo = Find(legacyPath);
                 string expectedArguments = Scheduler.BuildExecutorArguments("Spooler",
-                    ServiceOperation.HardRestart, false);
+                    ServiceOperation.HardRestart, false, legacyPath);
                 Check(migrated == 1 && migratedInfo.ActionExecutable == executor &&
                     migratedInfo.ActionArguments == expectedArguments,
                     "миграция заменяет и путь, и старые аргументы");

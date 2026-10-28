@@ -15,6 +15,20 @@ namespace ServiceScheduler
 {
     public sealed class TaskDialog : Window
     {
+        private sealed class ServiceComboBox : ComboBox
+        {
+            protected override void OnDropDownOpened(EventArgs e)
+            {
+                Popup popup = GetTemplateChild("PART_Popup") as Popup;
+                if (popup != null)
+                {
+                    popup.Width = ActualWidth;
+                    popup.MaxHeight = MaxDropDownHeight;
+                }
+                base.OnDropDownOpened(e);
+            }
+        }
+
         private sealed class OperationChoice
         {
             public ServiceOperation Operation { get; set; }
@@ -119,7 +133,7 @@ namespace ServiceScheduler
 
             panel.Children.Add(UiFactory.Label("Служба (можно выбрать стрелкой или начать ввод)", true));
             serviceView = CollectionViewSource.GetDefaultView(services);
-            serviceCombo = new ComboBox
+            serviceCombo = new ServiceComboBox
             {
                 Height = 42,
                 Margin = new Thickness(0, 5, 0, 3),
@@ -127,6 +141,7 @@ namespace ServiceScheduler
                 IsEditable = true,
                 IsTextSearchEnabled = false,
                 StaysOpenOnEdit = true,
+                MaxDropDownHeight = 420,
                 ItemsSource = serviceView,
                 ItemTemplate = ServiceTemplate()
             };
@@ -155,9 +170,13 @@ namespace ServiceScheduler
             operationCombo.SelectionChanged += delegate
             {
                 OperationChoice choice = operationCombo.SelectedItem as OperationChoice;
-                warningText.Visibility = choice != null &&
-                    choice.Operation == ServiceOperation.HardRestart ?
-                    Visibility.Visible : Visibility.Collapsed;
+                bool kill = choice != null && OperationInfo.UsesKill(choice.Operation);
+                warningText.Visibility = kill ? Visibility.Visible : Visibility.Collapsed;
+                if (kill)
+                    warningText.Text = choice.Operation == ServiceOperation.HardStop
+                        ? "Жёсткая остановка сразу выполняет taskkill и не запускает службу повторно."
+                        : "Жёсткий перезапуск сначала пробует штатную остановку. " +
+                          "taskkill применяется только при её сбое.";
             };
             panel.Children.Add(operationCombo);
             return panel;
@@ -167,10 +186,19 @@ namespace ServiceScheduler
         {
             DataTemplate template = new DataTemplate();
             FrameworkElementFactory row = new FrameworkElementFactory(typeof(Grid));
+            row.SetValue(Grid.HeightProperty, 32.0);
+            FrameworkElementFactory dotColumn = new FrameworkElementFactory(typeof(ColumnDefinition));
+            dotColumn.SetValue(ColumnDefinition.WidthProperty, new GridLength(24));
+            FrameworkElementFactory textColumn = new FrameworkElementFactory(typeof(ColumnDefinition));
+            textColumn.SetValue(ColumnDefinition.WidthProperty,
+                new GridLength(1, GridUnitType.Star));
+            row.AppendChild(dotColumn);
+            row.AppendChild(textColumn);
             FrameworkElementFactory dot = new FrameworkElementFactory(typeof(Ellipse));
+            dot.SetValue(Grid.ColumnProperty, 0);
             dot.SetValue(Ellipse.WidthProperty, 10.0);
             dot.SetValue(Ellipse.HeightProperty, 10.0);
-            dot.SetValue(Ellipse.MarginProperty, new Thickness(3, 0, 10, 0));
+            dot.SetValue(Ellipse.HorizontalAlignmentProperty, HorizontalAlignment.Center);
             dot.SetValue(Ellipse.VerticalAlignmentProperty, VerticalAlignment.Center);
             dot.SetBinding(Shape.FillProperty, new Binding("IsRunning")
             {
@@ -178,19 +206,15 @@ namespace ServiceScheduler
             });
             row.AppendChild(dot);
 
-            FrameworkElementFactory text = new FrameworkElementFactory(typeof(StackPanel));
-            text.SetValue(StackPanel.MarginProperty, new Thickness(23, 3, 3, 3));
             FrameworkElementFactory display = new FrameworkElementFactory(typeof(TextBlock));
-            display.SetBinding(TextBlock.TextProperty, new Binding("DisplayName"));
+            display.SetValue(Grid.ColumnProperty, 1);
+            display.SetBinding(TextBlock.TextProperty, new Binding("Display"));
             display.SetValue(TextBlock.FontSizeProperty, 14.0);
             display.SetValue(TextBlock.ForegroundProperty, UiFactory.Text);
-            text.AppendChild(display);
-            FrameworkElementFactory name = new FrameworkElementFactory(typeof(TextBlock));
-            name.SetBinding(TextBlock.TextProperty, new Binding("Name"));
-            name.SetValue(TextBlock.FontSizeProperty, 12.0);
-            name.SetValue(TextBlock.ForegroundProperty, UiFactory.MutedText);
-            text.AppendChild(name);
-            row.AppendChild(text);
+            display.SetValue(TextBlock.VerticalAlignmentProperty, VerticalAlignment.Center);
+            display.SetValue(TextBlock.TextTrimmingProperty, TextTrimming.CharacterEllipsis);
+            display.SetValue(TextBlock.MarginProperty, new Thickness(0, 0, 8, 0));
+            row.AppendChild(display);
             template.VisualTree = row;
             return template;
         }
@@ -223,10 +247,34 @@ namespace ServiceScheduler
             };
             AddField(fields, "Дата", datePicker, dateControls);
 
+            Grid timePanel = new Grid
+            {
+                Width = 182,
+                HorizontalAlignment = HorizontalAlignment.Left
+            };
+            timePanel.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(132) });
+            timePanel.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(50) });
             timeBox = UiFactory.Input("09:00", 120);
             timeBox.HorizontalAlignment = HorizontalAlignment.Left;
-            timeBox.ToolTip = "Формат: ЧЧ:мм, например 09:30";
-            AddField(fields, "Время (ЧЧ:мм)", timeBox, timeControls);
+            timeBox.ToolTip = "Можно ввести время вручную или выбрать на часах";
+            Grid.SetColumn(timeBox, 0);
+            timePanel.Children.Add(timeBox);
+            Button clockButton = UiFactory.IconButton("\uE916", "Выбрать время на часах",
+                UiFactory.Blue, UiFactory.BlueHover, delegate
+                {
+                    TimeSpan initial;
+                    try { initial = ReadTime(timeBox.Text); }
+                    catch { initial = new TimeSpan(9, 0, 0); }
+                    TimePickerDialog picker = new TimePickerDialog(this, initial);
+                    if (picker.ShowDialog() == true)
+                        timeBox.Text = picker.SelectedTime.ToString(@"hh\:mm");
+                });
+            clockButton.Width = 42;
+            clockButton.Height = 36;
+            clockButton.Margin = new Thickness(8, 0, 0, 0);
+            Grid.SetColumn(clockButton, 1);
+            timePanel.Children.Add(clockButton);
+            AddField(fields, "Время (ЧЧ:мм)", timePanel, timeControls);
 
             WrapPanel days = new WrapPanel { Margin = new Thickness(0, 4, 0, 8) };
             AddDay(days, "Пн", 2);
@@ -559,7 +607,7 @@ namespace ServiceScheduler
 
         private bool ConfirmSharedKill(ServiceInfo service, ServiceOperation operation)
         {
-            if (operation != ServiceOperation.HardRestart ||
+            if (!OperationInfo.UsesKill(operation) ||
                 (!service.IsSharedProcess && service.ProcessTypeKnown)) return false;
             List<string> affected;
             try { affected = ServiceOperations.GetServicesOnSameProcess(service.Name); }
@@ -568,12 +616,14 @@ namespace ServiceScheduler
             string list = string.Join("\n", affected.Take(18)
                 .Select(name => "  •  " + name).ToArray());
             if (affected.Count > 18) list += "\n  … и другие";
+            string behavior = operation == ServiceOperation.HardStop
+                ? "taskkill сразу завершит весь процесс"
+                : "если штатная остановка не поможет, taskkill завершит весь процесс";
             MessageBoxResult answer = MessageBox.Show(this,
                 "Служба работает в общем процессе или тип процесса не удалось определить.\n\n" +
-                "Если штатная остановка не поможет, taskkill завершит весь процесс. " +
-                "Это затронет перечисленные службы:\n\n" + list + "\n\n" +
-                "Разрешить принудительное завершение общего процесса при автоматическом выполнении?",
-                "Подтверждение жёсткого перезапуска", MessageBoxButton.YesNo,
+                "При автоматическом выполнении " + behavior + ". Это затронет перечисленные службы:\n\n" +
+                list + "\n\nРазрешить принудительное завершение общего процесса?",
+                "Подтверждение: " + OperationInfo.ToRussian(operation), MessageBoxButton.YesNo,
                 MessageBoxImage.Warning, MessageBoxResult.No);
             return answer == MessageBoxResult.Yes;
         }
@@ -587,7 +637,7 @@ namespace ServiceScheduler
                 ScheduleSpec schedule = ReadSchedule();
                 bool allowSharedKill = ConfirmSharedKill(selectedService,
                     selectedOperation.Operation);
-                if (selectedOperation.Operation == ServiceOperation.HardRestart &&
+                if (OperationInfo.UsesKill(selectedOperation.Operation) &&
                     (selectedService.IsSharedProcess || !selectedService.ProcessTypeKnown) &&
                     !allowSharedKill) return;
 
@@ -609,9 +659,9 @@ namespace ServiceScheduler
                     Logger.Warning("Задание сохранено, но старые исполнители не обновлены: " +
                         migrationWarning);
                 }
-                Logger.Info((originalTask == null ? "Создано задание " : "Изменено задание ") +
-                    path + "; служба=" + selectedService.Name + "; операция=" +
-                    OperationInfo.ToCode(selectedOperation.Operation));
+                Logger.Info((originalTask == null ? "Задание создано" : "Задание изменено") +
+                    ". Операция: " + OperationInfo.ToRussian(selectedOperation.Operation),
+                    path, selectedService.Name);
                 Mouse.OverrideCursor = null;
                 if (!string.IsNullOrEmpty(migrationWarning))
                     MessageBox.Show(this,

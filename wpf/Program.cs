@@ -10,7 +10,7 @@ namespace ServiceScheduler
 {
     public static class Program
     {
-        public const string Version = "2.0";
+        public const string Version = "2.1";
         private static Mutex guiMutex;
 
         [STAThread]
@@ -81,27 +81,30 @@ namespace ServiceScheduler
                 return 2;
             }
             bool allowSharedKill = false;
-            foreach (string arg in args)
-                if (string.Equals(arg, "--allow-shared-kill",
+            string taskPath = null;
+            for (int i = 3; i < args.Length; i++)
+            {
+                if (string.Equals(args[i], "--allow-shared-kill",
                     StringComparison.OrdinalIgnoreCase)) allowSharedKill = true;
+                else if (string.Equals(args[i], "--task", StringComparison.OrdinalIgnoreCase) &&
+                    i + 1 < args.Length) taskPath = args[++i];
+            }
 
-            Logger.Info("Задание запущено: служба=" + serviceName + ", операция=" +
-                OperationInfo.ToCode(operation));
+            Logger.Info("Начато выполнение. Операция: " + OperationInfo.ToRussian(operation),
+                taskPath, serviceName);
             try
             {
                 OperationResult result = ServiceOperations.Run(serviceName, operation,
                     allowSharedKill);
-                string text = (result.Success ? "УСПЕХ" : "ОШИБКА") + ": служба=" +
-                    serviceName + ", операция=" + OperationInfo.ToRussian(operation) +
-                    " — " + result.Message;
-                if (result.Success) Logger.Success(text);
-                else Logger.Error(text);
+                string text = (result.Success ? "Выполнено успешно" : "Ошибка выполнения") +
+                    ". Операция: " + OperationInfo.ToRussian(operation) + " — " + result.Message;
+                if (result.Success) Logger.Success(text, taskPath, serviceName);
+                else Logger.Error(text, taskPath, serviceName);
                 return result.Success ? 0 : 1;
             }
             catch (Exception ex)
             {
-                Logger.Error("Внутренняя ошибка исполнителя: служба=" + serviceName +
-                    " — " + ex);
+                Logger.Error("Внутренняя ошибка исполнителя: " + ex, taskPath, serviceName);
                 return 1;
             }
         }

@@ -124,8 +124,10 @@ namespace ServiceScheduler
             bool hasLegacy = TryParseLegacyName(name, out legacyService, out legacyOperation);
             bool executorMarker = (arguments ?? string.Empty).IndexOf("--exec",
                 StringComparison.OrdinalIgnoreCase) >= 0;
-            bool own = string.Equals(folderPath, FolderPath, StringComparison.OrdinalIgnoreCase)
-                && executorMarker && (hasMetadata || hasLegacy);
+            string normalizedFolder = (folderPath ?? string.Empty).TrimEnd('\\') + "\\";
+            bool own = string.Equals(normalizedFolder, FolderPath,
+                StringComparison.OrdinalIgnoreCase) && executorMarker &&
+                (hasMetadata || hasLegacy);
 
             TaskInfo info = new TaskInfo
             {
@@ -230,8 +232,8 @@ namespace ServiceScheduler
             if (string.IsNullOrEmpty(taskName) || !taskName.StartsWith(LegacyPrefix))
                 return false;
             string rest = taskName.Substring(LegacyPrefix.Length);
-            // Сначала длинный суффикс: hard_restart не должен превращаться в restart.
-            string[] codes = { "hard_restart", "restart", "start", "stop" };
+            // Сначала длинные суффиксы, затем их короткие окончания.
+            string[] codes = { "hard_restart", "hard_stop", "restart", "start", "stop" };
             foreach (string code in codes)
             {
                 string suffix = "_" + code;
@@ -239,11 +241,7 @@ namespace ServiceScheduler
                     rest.Length > suffix.Length)
                 {
                     service = rest.Substring(0, rest.Length - suffix.Length);
-                    operation = (ServiceOperation)Enum.Parse(typeof(ServiceOperation),
-                        code == "hard_restart" ? "HardRestart" :
-                        code == "restart" ? "Restart" :
-                        code == "start" ? "Start" : "Stop");
-                    return true;
+                    return OperationInfo.TryFromCode(code, out operation);
                 }
             }
             return false;
@@ -387,7 +385,8 @@ namespace ServiceScheduler
             dynamic service = CreateConnection();
             dynamic folder = GetFolder(service, true);
             string name = string.IsNullOrEmpty(originalName) ?
-                LegacyPrefix + Guid.NewGuid().ToString("N").Substring(0, 12) : originalName;
+                CreateFriendlyTaskName(folder, serviceName, operation, schedule) : originalName;
+            string path = FolderPath + name;
             dynamic definition = service.NewTask(0);
             definition.RegistrationInfo.Author = "ServiceScheduler";
             definition.RegistrationInfo.Description = BuildMetadata(serviceName, operation,
@@ -407,18 +406,77 @@ namespace ServiceScheduler
 
             dynamic action = definition.Actions.Create(0);
             action.Path = executorPath;
-            action.Arguments = BuildExecutorArguments(serviceName, operation, allowSharedKill);
+            action.Arguments = BuildExecutorArguments(serviceName, operation, allowSharedKill, path);
 
             AddTrigger(definition.Triggers, schedule);
             folder.RegisterTaskDefinition(name, definition, 6, "SYSTEM", null, 5, null);
-            return FolderPath + name;
+            return path;
+        }
+
+        private static string CreateFriendlyTaskName(dynamic folder, string serviceName,
+            ServiceOperation operation, ScheduleSpec schedule)
+        {
+            string baseName = SanitizeTaskName(serviceName + " — " +
+                OperationInfo.ToRussian(operation) + " — " + ScheduleName(schedule));
+            if (baseName.Length > 150) baseName = baseName.Substring(0, 150).TrimEnd();
+            for (int suffix = 1; suffix < 1000; suffix++)
+            {
+                string candidate = suffix == 1 ? baseName :
+                    baseName + " (" + suffix + ")";
+                if (!TaskExists(folder, candidate)) return candidate;
+            }
+            throw new ServiceSchedulerException("Не удалось подобрать уникальное имя задания.");
+        }
+
+        private static string ScheduleName(ScheduleSpec schedule)
+        {
+            string time = schedule.Time.ToString(@"hh\-mm");
+            switch (schedule.Type)
+            {
+                case ScheduleType.Daily: return "ежедневно " + time;
+                case ScheduleType.Weekly: return "еженедельно " + time;
+                case ScheduleType.Monthly:
+                    return "ежемесячно " + schedule.DayOfMonth + " " + time;
+                case ScheduleType.Once:
+                    return schedule.Date.ToString("dd.MM.yyyy") + " " + time;
+                case ScheduleType.Startup: return "при запуске системы";
+                case ScheduleType.Interval: return "каждые " + schedule.IntervalMinutes + " мин";
+                default: return "по расписанию";
+            }
+        }
+
+        private static string SanitizeTaskName(string value)
+        {
+            char[] invalid = { '\\', '/', ':', '*', '?', '"', '<', '>', '|' };
+            StringBuilder result = new StringBuilder(value.Length);
+            foreach (char character in value)
+                result.Append(character < 32 || Array.IndexOf(invalid, character) >= 0
+                    ? '-' : character);
+            return result.ToString().Trim();
+        }
+
+        private static bool TaskExists(dynamic folder, string name)
+        {
+            try
+            {
+                dynamic task = folder.GetTask(name);
+                return task != null;
+            }
+            catch (Exception ex)
+            {
+                if (ex is COMException || ex is System.IO.FileNotFoundException) return false;
+                throw;
+            }
         }
 
         public static string BuildExecutorArguments(string serviceName,
-            ServiceOperation operation, bool allowSharedKill)
+            ServiceOperation operation, bool allowSharedKill, string taskPath = null)
         {
-            return string.Format("--exec \"{0}\" {1}{2}", serviceName,
+            string arguments = string.Format("--exec \"{0}\" {1}{2}", serviceName,
                 OperationInfo.ToCode(operation), allowSharedKill ? " --allow-shared-kill" : "");
+            if (!string.IsNullOrWhiteSpace(taskPath))
+                arguments += " --task \"" + taskPath.Replace("\"", "") + "\"";
+            return arguments;
         }
 
         private static string BuildMetadata(string serviceName, ServiceOperation operation,
@@ -535,7 +593,7 @@ namespace ServiceScheduler
                 if (!info.IsOwn || !info.Operation.HasValue) continue;
                 string currentPath = (info.ActionExecutable ?? string.Empty).Trim().Trim('"');
                 string expectedArguments = BuildExecutorArguments(info.ServiceName,
-                    info.Operation.Value, info.AllowSharedKill);
+                    info.Operation.Value, info.AllowSharedKill, info.Path);
                 if (string.Equals(currentPath, executorPath, StringComparison.OrdinalIgnoreCase) &&
                     string.Equals((info.ActionArguments ?? string.Empty).Trim(), expectedArguments,
                         StringComparison.Ordinal)) continue;

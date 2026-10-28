@@ -27,7 +27,7 @@ namespace ServiceScheduler
                 Path.GetFullPath(ProtectedPath).TrimEnd('\\'),
                 StringComparison.OrdinalIgnoreCase);
             string expectedArguments = Scheduler.BuildExecutorArguments(task.ServiceName,
-                task.Operation.Value, task.AllowSharedKill);
+                task.Operation.Value, task.AllowSharedKill, task.Path);
             bool wrongArguments = !string.Equals((task.ActionArguments ?? string.Empty).Trim(),
                 expectedArguments, StringComparison.Ordinal);
             return wrongPath || wrongArguments;

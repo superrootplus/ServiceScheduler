@@ -280,9 +280,56 @@ namespace ServiceScheduler
                         return RestartInternal(controller, false, allowSharedKill);
                     case ServiceOperation.HardRestart:
                         return RestartInternal(controller, true, allowSharedKill);
+                    case ServiceOperation.HardStop:
+                        return HardStopInternal(controller, allowSharedKill);
                     default:
                         return new OperationResult(false, "Неизвестная операция");
                 }
+            }
+        }
+
+        private static OperationResult HardStopInternal(ServiceController controller,
+            bool allowSharedKill)
+        {
+            controller.Refresh();
+            if (controller.Status == ServiceControllerStatus.Stopped)
+                return new OperationResult(true, "Служба уже остановлена");
+
+            bool shared = IsSharedProcess(controller);
+            List<string> sameProcess = shared ?
+                GetServicesOnSameProcess(controller.ServiceName) : new List<string>();
+            if (shared && !allowSharedKill)
+                return new OperationResult(false,
+                    "Принудительный kill запрещён: процесс является общим или его тип " +
+                    "не удалось определить. Затронутые службы: " +
+                    string.Join(", ", sameProcess.ToArray()));
+
+            int pid = GetProcessId(controller.ServiceName);
+            if (pid <= 0)
+            {
+                controller.Refresh();
+                if (controller.Status == ServiceControllerStatus.Stopped)
+                    return new OperationResult(true, "Служба уже остановлена");
+                return new OperationResult(false,
+                    "Не удалось получить PID работающей службы для taskkill");
+            }
+
+            if (shared)
+                Logger.Warning("Разрешён kill общего процесса PID " + pid +
+                    ". Службы процесса: " + string.Join(", ", sameProcess.ToArray()));
+            OperationResult kill = KillProcess(pid);
+            if (!kill.Success) return kill;
+            try
+            {
+                controller.WaitForStatus(ServiceControllerStatus.Stopped,
+                    TimeSpan.FromSeconds(10));
+                return new OperationResult(true, kill.Message + "; служба остановлена");
+            }
+            catch (Exception ex)
+            {
+                return new OperationResult(false,
+                    "Процесс завершён, но служба не перешла в остановленное состояние: " +
+                    ex.Message);
             }
         }
 
