@@ -52,6 +52,7 @@ namespace ServiceScheduler
         private TextBox monthDayBox;
         private TextBox intervalBox;
         private CheckBox disabledCheck;
+        private CheckBox hideWindowsServicesCheck;
         private TextBlock serviceHint;
         private TextBlock warningText;
         private readonly List<CheckBox> dayChecks = new List<CheckBox>();
@@ -68,7 +69,7 @@ namespace ServiceScheduler
             services = availableServices;
             originalTask = task;
             Owner = owner;
-            Title = task == null ? "Новое задание" : "Изменение задания";
+            Title = task == null ? "Новое задание" : task.Name;
             Width = 720;
             Height = 760;
             MinWidth = 640;
@@ -83,7 +84,7 @@ namespace ServiceScheduler
 
             DockPanel root = new DockPanel();
             Border header = UiFactory.Header(
-                task == null ? "Новое задание планировщика" : "Изменение задания",
+                task == null ? "Новое задание планировщика" : "Свойства задания",
                 task == null ? "Выберите службу, операцию и расписание" : task.Path);
             DockPanel.SetDock(header, Dock.Top);
             root.Children.Add(header);
@@ -150,6 +151,17 @@ namespace ServiceScheduler
             serviceCombo.SelectionChanged += ServiceSelectionChanged;
             serviceCombo.DropDownOpened += ServiceDropDownOpened;
             panel.Children.Add(serviceCombo);
+
+            hideWindowsServicesCheck = new CheckBox
+            {
+                Content = "Не показывать стандартные службы Windows",
+                FontSize = 14,
+                Margin = new Thickness(0, 2, 0, 5),
+                ToolTip = "Скрыть службы, исполняемые файлы которых находятся в папке Windows"
+            };
+            hideWindowsServicesCheck.Checked += delegate { ApplyServiceFilter(string.Empty); };
+            hideWindowsServicesCheck.Unchecked += delegate { ApplyServiceFilter(string.Empty); };
+            panel.Children.Add(hideWindowsServicesCheck);
 
             serviceHint = new TextBlock
             {
@@ -502,13 +514,17 @@ namespace ServiceScheduler
 
         private void ApplyServiceFilter(string query)
         {
+            bool hideWindows = hideWindowsServicesCheck != null &&
+                hideWindowsServicesCheck.IsChecked == true;
+            bool hasQuery = !string.IsNullOrWhiteSpace(query);
             serviceView.Filter = null;
-            if (!string.IsNullOrWhiteSpace(query))
+            if (hideWindows || hasQuery)
             {
                 serviceView.Filter = delegate(object item)
                 {
                     ServiceInfo service = item as ServiceInfo;
-                    return service != null && (service.SearchText ?? string.Empty).IndexOf(
+                    if (service == null || (hideWindows && service.IsWindowsService)) return false;
+                    return !hasQuery || (service.SearchText ?? string.Empty).IndexOf(
                         query, StringComparison.CurrentCultureIgnoreCase) >= 0;
                 };
             }

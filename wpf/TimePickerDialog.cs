@@ -141,10 +141,17 @@ namespace ServiceScheduler
             else
             {
                 int hourOnDial = ((int)Math.Round(angle / 30)) % 12;
-                hour = hourOnDial + (hour >= 12 ? 12 : 0);
+                hour = HourFromDial(hour, hourOnDial);
                 selectingMinutes = true;
             }
             DrawFace();
+        }
+
+        internal static int HourFromDial(int currentHour, int hourOnDial)
+        {
+            // На циферблате верхнее деление означает 12 часов, а не 00.
+            // Полночь по-прежнему доступна переключателем половины суток.
+            return hourOnDial == 0 ? 12 : hourOnDial + (currentHour >= 12 ? 12 : 0);
         }
 
         private void DrawFace()

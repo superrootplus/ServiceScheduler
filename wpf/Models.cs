@@ -80,6 +80,7 @@ namespace ServiceScheduler
         public bool IsRunning { get; set; }
         public bool IsSharedProcess { get; set; }
         public bool ProcessTypeKnown { get; set; }
+        public bool IsWindowsService { get; set; }
 
         public string Display
         {

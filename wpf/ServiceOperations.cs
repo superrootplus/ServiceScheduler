@@ -19,11 +19,25 @@ namespace ServiceScheduler
             public string Name;
             public string DisplayName;
             public uint ProcessId;
+            public string PathName;
         }
 
         public static List<ServiceInfo> GetServices()
         {
             List<ServiceInfo> result = new List<ServiceInfo>();
+            Dictionary<string, WmiService> wmiByName =
+                new Dictionary<string, WmiService>(StringComparer.OrdinalIgnoreCase);
+            try
+            {
+                foreach (WmiService service in GetWmiServices())
+                    if (!string.IsNullOrWhiteSpace(service.Name)) wmiByName[service.Name] = service;
+            }
+            catch
+            {
+                // Список служб остаётся доступным и без WMI. Неизвестное происхождение
+                // не считаем стандартным, чтобы фильтр случайно ничего не скрыл.
+            }
+
             foreach (ServiceController controller in ServiceController.GetServices())
             {
                 using (controller)
@@ -37,6 +51,9 @@ namespace ServiceScheduler
                         Status = StatusToRussian(controller.Status),
                         ProcessTypeKnown = true
                     };
+                    WmiService wmi;
+                    if (wmiByName.TryGetValue(info.Name, out wmi))
+                        info.IsWindowsService = IsWindowsServicePath(wmi.PathName);
                     try
                     {
                         info.IsSharedProcess =
@@ -53,6 +70,23 @@ namespace ServiceScheduler
             }
             return result.OrderBy(s => s.DisplayName, StringComparer.CurrentCultureIgnoreCase)
                 .ThenBy(s => s.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        internal static bool IsWindowsServicePath(string imagePath)
+        {
+            if (string.IsNullOrWhiteSpace(imagePath)) return false;
+            string path = Environment.ExpandEnvironmentVariables(imagePath.Trim());
+            if (path.StartsWith(@"\\??\", StringComparison.OrdinalIgnoreCase))
+                path = path.Substring(4);
+            if (path.StartsWith(@"\SystemRoot\", StringComparison.OrdinalIgnoreCase) ||
+                path.StartsWith("System32\\", StringComparison.OrdinalIgnoreCase) ||
+                path.StartsWith("SysWOW64\\", StringComparison.OrdinalIgnoreCase)) return true;
+
+            string windowsDirectory = Environment.GetEnvironmentVariable("SystemRoot");
+            if (string.IsNullOrWhiteSpace(windowsDirectory)) return false;
+            windowsDirectory = windowsDirectory.TrimEnd('\\');
+            return path.StartsWith(windowsDirectory + "\\", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(path, windowsDirectory, StringComparison.OrdinalIgnoreCase);
         }
 
         public static ServiceController OpenService(string serviceName)
@@ -92,7 +126,7 @@ namespace ServiceScheduler
         {
             List<WmiService> result = new List<WmiService>();
             using (ManagementObjectSearcher searcher = new ManagementObjectSearcher(
-                "SELECT Name, DisplayName, ProcessId FROM Win32_Service"))
+                "SELECT Name, DisplayName, ProcessId, PathName FROM Win32_Service"))
             using (ManagementObjectCollection items = searcher.Get())
             {
                 foreach (ManagementObject item in items)
@@ -103,7 +137,8 @@ namespace ServiceScheduler
                         {
                             Name = Convert.ToString(item["Name"]),
                             DisplayName = Convert.ToString(item["DisplayName"]),
-                            ProcessId = Convert.ToUInt32(item["ProcessId"])
+                            ProcessId = Convert.ToUInt32(item["ProcessId"]),
+                            PathName = Convert.ToString(item["PathName"])
                         });
                     }
                 }

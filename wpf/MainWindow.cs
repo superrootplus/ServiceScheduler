@@ -203,9 +203,9 @@ namespace ServiceScheduler
             grid.CellStyle = CellStyle();
             grid.RowStyle = RowStyle();
 
-            AddLinkColumn("Задание", "Name", 200, "Открыть в Планировщике заданий Windows",
+            AddLinkColumn("Задание", "Name", 200, "Открыть свойства именно этого задания",
                 OpenTaskScheduler);
-            AddLinkColumn("Служба", "ServiceName", 180, "Открыть оснастку «Службы»",
+            AddLinkColumn("Служба", "ServiceName", 180, "Открыть свойства этой службы в Windows",
                 OpenServiceConsole);
             AddColumn("Операция", "OperationText", 190);
             AddStarColumn("Расписание", "ScheduleText", 1.4);
@@ -305,6 +305,16 @@ namespace ServiceScheduler
                 VerticalAlignment.Center));
             style.Setters.Add(new Setter(DataGridCell.PaddingProperty,
                 new Thickness(6, 2, 6, 2)));
+            Trigger selected = new Trigger
+            {
+                Property = DataGridCell.IsSelectedProperty,
+                Value = true
+            };
+            selected.Setters.Add(new Setter(DataGridCell.BackgroundProperty,
+                UiFactory.Brush("#DCFCE7")));
+            selected.Setters.Add(new Setter(DataGridCell.ForegroundProperty,
+                UiFactory.Text));
+            style.Triggers.Add(selected);
             return style;
         }
 
@@ -337,6 +347,16 @@ namespace ServiceScheduler
             disabled.Setters.Add(new Setter(DataGridRow.ForegroundProperty,
                 UiFactory.Brush("#B91C1C")));
             style.Triggers.Add(disabled);
+            Trigger selected = new Trigger
+            {
+                Property = DataGridRow.IsSelectedProperty,
+                Value = true
+            };
+            selected.Setters.Add(new Setter(DataGridRow.BackgroundProperty,
+                UiFactory.Brush("#DCFCE7")));
+            selected.Setters.Add(new Setter(DataGridRow.ForegroundProperty,
+                UiFactory.Text));
+            style.Triggers.Add(selected);
             return style;
         }
 
@@ -559,16 +579,33 @@ namespace ServiceScheduler
 
         private void OpenTaskScheduler(TaskInfo task)
         {
-            try
+            if (!task.IsOwn)
             {
-                Process.Start(new ProcessStartInfo
-                {
-                    FileName = "taskschd.msc",
-                    UseShellExecute = true
-                });
-                statusText.Text = "Открыт Планировщик заданий. Путь: " + task.Path;
+                string text = "Системное задание Windows. Доступен только просмотр.\n\n" +
+                    "Имя: " + task.Name + "\nПуть: " + task.Path +
+                    "\nСлужба: " + task.ServiceName +
+                    "\nОперация: " + task.OperationText +
+                    "\nРасписание: " + task.ScheduleText +
+                    "\nПоследний запуск: " + task.LastRunText +
+                    "\nСледующий запуск: " + task.NextRunText +
+                    "\nРезультат: " + task.LastResultText +
+                    "\nСостояние: " + task.StateText +
+                    "\n\nДействие: " + task.ActionExecutable +
+                    "\nАргументы: " + task.ActionArguments +
+                    "\n\nОписание:\n" + task.Description;
+                statusText.Text = "Открыты свойства задания: " + task.Name;
+                UiFactory.ShowTextWindow(this, task.Name, text);
+                return;
             }
-            catch (Exception ex) { ShowError(ex); }
+            if (services.Count == 0)
+            {
+                MessageBox.Show(this, "Список служб ещё загружается.", "Задания",
+                    MessageBoxButton.OK, MessageBoxImage.Information);
+                return;
+            }
+            TaskDialog dialog = new TaskDialog(this, services, task);
+            statusText.Text = "Открыты свойства задания: " + task.Name;
+            if (dialog.ShowDialog() == true) RefreshTasks();
         }
 
         private void OpenServiceConsole(TaskInfo task)
@@ -579,16 +616,34 @@ namespace ServiceScheduler
                     "Служба", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
-            try
+            ServiceInfo service = services.FirstOrDefault(s => string.Equals(s.Name,
+                task.ServiceName, StringComparison.OrdinalIgnoreCase));
+            if (service == null)
+                service = new ServiceInfo { Name = task.ServiceName, DisplayName = task.ServiceName };
+            statusText.Text = "Открываю свойства службы…";
+            Mouse.OverrideCursor = Cursors.Wait;
+            ThreadPool.QueueUserWorkItem(delegate
             {
-                Process.Start(new ProcessStartInfo
+                try
                 {
-                    FileName = "services.msc",
-                    UseShellExecute = true
-                });
-                statusText.Text = "Открыта оснастка «Службы». Имя службы: " + task.ServiceName;
-            }
-            catch (Exception ex) { ShowError(ex); }
+                    WindowsEditors.OpenService(service);
+                    Dispatcher.BeginInvoke(new Action(delegate
+                    {
+                        statusText.Text = "Открыты свойства службы: " + service.Name;
+                    }));
+                }
+                catch (Exception ex)
+                {
+                    Dispatcher.BeginInvoke(new Action(delegate { ShowError(ex); }));
+                }
+                finally
+                {
+                    Dispatcher.BeginInvoke(new Action(delegate
+                    {
+                        Mouse.OverrideCursor = null;
+                    }));
+                }
+            });
         }
 
         private void ShowLog(TaskInfo task = null)

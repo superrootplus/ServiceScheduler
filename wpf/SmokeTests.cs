@@ -43,6 +43,15 @@ namespace ServiceScheduler
                 Check(services.Count > 0, "список служб прочитан: " + services.Count);
                 ServiceInfo dcom = services.FirstOrDefault(s => s.Name == "DcomLaunch");
                 if (dcom != null) Check(dcom.IsSharedProcess, "DcomLaunch распознан как общий процесс");
+                if (dcom != null) Check(dcom.IsWindowsService,
+                    "стандартная служба Windows распознана по пути исполняемого файла");
+                Check(ServiceOperations.IsWindowsServicePath(
+                    @"%SystemRoot%\System32\svchost.exe -k LocalService") &&
+                    ServiceOperations.IsWindowsServicePath(@"system32\drivers\example.sys") &&
+                    !ServiceOperations.IsWindowsServicePath(
+                        @"C:\Program Files\Example\service.exe") &&
+                    !ServiceOperations.IsWindowsServicePath(null),
+                    "фильтр стандартных служб корректно разбирает пути");
 
                 string legacyService;
                 ServiceOperation legacyOperation;
